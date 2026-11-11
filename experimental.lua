@@ -1,177 +1,706 @@
 --!native
 --!optimize 2
--- Experimental local Luau policy. Blox League and Turbo Soccer adapters.
-local Players=game:GetService("Players")
-local RunService=game:GetService("RunService")
-local UIS=game:GetService("UserInputService")
-local RS=game:GetService("ReplicatedStorage")
-local LP=Players.LocalPlayer
-local env=type(getgenv)=="function" and getgenv() or _G
-if type(env.ExperimentalBotUnload)=="function"then pcall(env.ExperimentalBotUnload)end
+-- Experimental v3.0.0 -- Starlight Interface Suite edition.
+-- Games: Blox League, Turbo Soccer.
+--
+-- The policy, model loader and hook layer below are the v0.2.1 core, unchanged.
+-- Everything around them is new: Starlight interface, saved configs, keybinds,
+-- live HUD, session telemetry, diagnostics and a reload/unload flow.
 
-local alive,enabled,ready=false,false,false
-alive=true
-local connections={}
-local gui=Instance.new("ScreenGui")
-gui.Name="ExperimentalBot"
-gui.ResetOnSpawn=false
-gui.IgnoreGuiInset=true
-gui.DisplayOrder=80
-gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-gui.Parent=LP:WaitForChild("PlayerGui")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+local LP = Players.LocalPlayer
+local env = type(getgenv) == "function" and getgenv() or _G
 
-local frame=Instance.new("Frame")
-frame.Name="Panel"
-frame.Size=UDim2.fromOffset(286,166)
-frame.Position=UDim2.new(0,24,.28,0)
-frame.BackgroundColor3=Color3.fromRGB(18,20,29)
-frame.BorderSizePixel=0
-frame.Active=true
-frame.Parent=gui
+if type(env.ExperimentalBotUnload) == "function" then pcall(env.ExperimentalBotUnload) end
 
-local corner=Instance.new("UICorner")
-corner.CornerRadius=UDim.new(0,13)
-corner.Parent=frame
+local VERSION = "3.0.0"
+local SCRIPT_URL = "https://raw.githubusercontent.com/filbygblh/Scruipt/refs/heads/main/experimental.lua"
+local STARLIGHT_URLS = {
+    "https://raw.githubusercontent.com/Nebula-Softworks/Starlight-Interface-Suite/master/Source.lua",
+    "https://raw.githubusercontent.com/Nebula-Softworks/Starlight-Interface-Suite/main/Source.lua",
+}
 
-local stroke=Instance.new("UIStroke")
-stroke.Color=Color3.fromRGB(91,76,145)
-stroke.Thickness=1.25
-stroke.Transparency=.2
-stroke.Parent=frame
+local alive, enabled, ready = false, false, false
+alive = true
+local connections = {}
+local message = "Starting up..."
+local typing = false
+local reset      -- assigned by the bot core
+local bot = {}   -- late-bound bridge between the interface and the core
+local startedAt = os.clock()
 
-local accent=Instance.new("Frame")
-accent.Name="Accent"
-accent.Size=UDim2.new(1,-28,0,3)
-accent.Position=UDim2.fromOffset(14,0)
-accent.BackgroundColor3=Color3.fromRGB(151,111,255)
-accent.BorderSizePixel=0
-accent.Parent=frame
-local accentCorner=Instance.new("UICorner")
-accentCorner.CornerRadius=UDim.new(1,0)
-accentCorner.Parent=accent
+local settings = {
+    notifications = true,
+    autoEnable = false,
+    pauseOnType = true,
+    showHud = true,
+    hudLayout = "Detailed",
+    hudScale = 100,
+}
 
-local header=Instance.new("TextLabel")
-header.Name="DragHandle"
-header.Size=UDim2.new(1,-28,0,34)
-header.Position=UDim2.fromOffset(14,10)
-header.BackgroundTransparency=1
-header.Text="EXPERIMENTAL"
-header.Font=Enum.Font.GothamBold
-header.TextColor3=Color3.fromRGB(239,237,255)
-header.TextSize=15
-header.TextXAlignment=Enum.TextXAlignment.Left
-header.Active=true
-header.Parent=frame
-
-local version=Instance.new("TextLabel")
-version.Name="Version"
-version.Size=UDim2.new(1,-28,0,18)
-version.Position=UDim2.fromOffset(14,39)
-version.BackgroundTransparency=1
-version.Text="Blox League / Turbo Soccer  •  v0.2.1"
-version.Font=Enum.Font.Gotham
-version.TextColor3=Color3.fromRGB(139,143,165)
-version.TextSize=10
-version.TextXAlignment=Enum.TextXAlignment.Left
-version.Parent=frame
-
-local toggle=Instance.new("TextButton")
-toggle.Name="Toggle"
-toggle.Size=UDim2.new(1,-28,0,42)
-toggle.Position=UDim2.fromOffset(14,66)
-toggle.BackgroundColor3=Color3.fromRGB(53,47,76)
-toggle.Text="ENABLE BOT"
-toggle.Font=Enum.Font.GothamBold
-toggle.TextSize=13
-toggle.TextColor3=Color3.fromRGB(255,255,255)
-toggle.BorderSizePixel=0
-toggle.AutoButtonColor=true
-toggle.Parent=frame
-local tc=Instance.new("UICorner")
-tc.CornerRadius=UDim.new(0,9)
-tc.Parent=toggle
-
-local label=Instance.new("TextLabel")
-label.Name="Status"
-label.Size=UDim2.new(1,-28,0,20)
-label.Position=UDim2.fromOffset(14,116)
-label.Text="Loading model..."
-label.TextColor3=Color3.fromRGB(181,184,204)
-label.Font=Enum.Font.GothamMedium
-label.TextSize=11
-label.TextWrapped=true
-label.TextXAlignment=Enum.TextXAlignment.Left
-label.BackgroundTransparency=1
-label.Parent=frame
-
-local hotkeys=Instance.new("TextLabel")
-hotkeys.Name="Hotkeys"
-hotkeys.Size=UDim2.new(1,-28,0,16)
-hotkeys.Position=UDim2.fromOffset(14,142)
-hotkeys.Text="INSERT  Menu     •     F1  Bot"
-hotkeys.TextColor3=Color3.fromRGB(112,116,139)
-hotkeys.Font=Enum.Font.Gotham
-hotkeys.TextSize=10
-hotkeys.TextXAlignment=Enum.TextXAlignment.Left
-hotkeys.BackgroundTransparency=1
-hotkeys.Parent=frame
-
-local message="Loading model..."
-local reset
-local function connect(signal,callback)local c=signal:Connect(callback);table.insert(connections,c);return c end
-local function status(value)message=value end
-local function setEnabled(value)
-    enabled=value
-    reset()
-    toggle.Text=enabled and "DISABLE BOT" or "ENABLE BOT"
-    toggle.BackgroundColor3=enabled and Color3.fromRGB(103,75,177) or Color3.fromRGB(53,47,76)
-    status(enabled and (ready and "ON  •  Waiting for live match" or "ON  •  Loading model") or "OFF  •  Ready")
+local function connect(signal, callback)
+    local c = signal:Connect(callback)
+    table.insert(connections, c)
+    return c
 end
-local function clampPanel(x,y)
-    local camera=workspace.CurrentCamera
+
+local function status(value)
+    message = tostring(value)
+end
+
+local notify = function() end
+local syncGuard = false
+local booting = true
+
+local function setEnabled(value, silent)
+    value = value and true or false
+    enabled = value
+    if reset then
+        reset()
+        if value then
+            status(ready and "ON - Waiting for live match" or "ON - Loading model")
+        else
+            status("OFF - Ready")
+        end
+    end
+    if bot.setToggle then
+        syncGuard = true
+        pcall(bot.setToggle, value)
+        syncGuard = false
+    end
+    if not silent and not booting then
+        notify(
+            value and "Auto-play enabled" or "Auto-play disabled",
+            value and "The policy is driving your car." or "You have manual control again."
+        )
+    end
+end
+
+local function detectedGame()
+    if game.PlaceId == 101880234193261 then
+        return "Turbo Soccer"
+    end
+    return "Blox League"
+end
+
+local function uptime()
+    local total = math.floor(os.clock() - startedAt)
+    return string.format("%d:%02d", math.floor(total / 60), total % 60)
+end
+
+local function reloadScript()
+    if type(env.ExperimentalBotUnload) == "function" then
+        pcall(env.ExperimentalBotUnload)
+    end
+    task.defer(function()
+        local ok, err = pcall(function()
+            local chunk = loadstring(game:HttpGet(SCRIPT_URL))
+            assert(type(chunk) == "function", "download failed")
+            chunk()
+        end)
+        if not ok then
+            warn("[Experimental] Reload failed: " .. tostring(err))
+        end
+    end)
+end
+
+-- ============================================================ palette / HUD
+local PURPLE = Color3.fromRGB(151, 111, 255)
+local BG = Color3.fromRGB(17, 19, 27)
+local TEXT = Color3.fromRGB(239, 237, 255)
+local MUTED = Color3.fromRGB(139, 143, 165)
+local GREEN = Color3.fromRGB(74, 222, 128)
+local AMBER = Color3.fromRGB(251, 191, 36)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "ExperimentalHUD"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 90
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LP:WaitForChild("PlayerGui")
+
+local panel = Instance.new("Frame")
+panel.Name = "Panel"
+panel.Position = UDim2.fromOffset(24, 190)
+panel.Size = UDim2.fromOffset(326, 172)
+panel.BackgroundColor3 = BG
+panel.BackgroundTransparency = 0.06
+panel.BorderSizePixel = 0
+panel.Active = true
+panel.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 14)
+corner.Parent = panel
+
+local panelStroke = Instance.new("UIStroke")
+panelStroke.Color = Color3.fromRGB(91, 76, 145)
+panelStroke.Thickness = 1.2
+panelStroke.Transparency = 0.25
+panelStroke.Parent = panel
+
+local hudScaleObj = Instance.new("UIScale")
+hudScaleObj.Scale = 1
+hudScaleObj.Parent = panel
+
+local accent = Instance.new("Frame")
+accent.Name = "Accent"
+accent.Size = UDim2.new(1, -28, 0, 3)
+accent.Position = UDim2.fromOffset(14, 0)
+accent.BackgroundColor3 = PURPLE
+accent.BorderSizePixel = 0
+accent.Parent = panel
+local accentCorner = Instance.new("UICorner")
+accentCorner.CornerRadius = UDim.new(1, 0)
+accentCorner.Parent = accent
+
+local function hudLabel(parent, text, x, y, w, h, size, color, bold)
+    local item = Instance.new("TextLabel")
+    item.BackgroundTransparency = 1
+    item.Position = UDim2.fromOffset(x, y)
+    item.Size = UDim2.fromOffset(w, h)
+    item.Text = text
+    item.TextSize = size
+    item.TextColor3 = color
+    item.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+    item.TextXAlignment = Enum.TextXAlignment.Left
+    item.TextYAlignment = Enum.TextYAlignment.Top
+    item.Parent = parent
+    return item
+end
+
+local header = hudLabel(panel, "EXPERIMENTAL", 14, 10, 190, 22, 14, TEXT, true)
+header.Name = "Drag"
+header.Active = true
+header.Size = UDim2.new(1, -124, 0, 22)
+header.TextYAlignment = Enum.TextYAlignment.Center
+
+local versionLabel = hudLabel(panel, "v" .. VERSION, 0, 12, 80, 16, 10, MUTED, false)
+versionLabel.Position = UDim2.new(1, -94, 0, 12)
+versionLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+local hudDot = Instance.new("Frame")
+hudDot.Name = "StateDot"
+hudDot.Size = UDim2.fromOffset(7, 7)
+hudDot.Position = UDim2.fromOffset(14, 40)
+hudDot.BackgroundColor3 = MUTED
+hudDot.BorderSizePixel = 0
+hudDot.Parent = panel
+local dotCorner = Instance.new("UICorner")
+dotCorner.CornerRadius = UDim.new(1, 0)
+dotCorner.Parent = hudDot
+
+local hudState = hudLabel(panel, "IDLE", 27, 35, 90, 16, 10, MUTED, true)
+
+local hudStatus = hudLabel(panel, "Starting up...", 14, 52, 298, 32, 11, Color3.fromRGB(181, 184, 204), false)
+hudStatus.TextWrapped = true
+
+local statsFrame = Instance.new("Frame")
+statsFrame.Name = "Stats"
+statsFrame.BackgroundTransparency = 1
+statsFrame.Position = UDim2.fromOffset(14, 92)
+statsFrame.Size = UDim2.fromOffset(298, 38)
+statsFrame.Parent = panel
+
+local statCaptions = { "FPS", "DECISIONS", "INFERENCE", "LATENCY" }
+local statValues = {}
+for i = 1, 4 do
+    local x = (i - 1) * 74
+    hudLabel(statsFrame, statCaptions[i], x, 0, 70, 11, 9, MUTED, false)
+    statValues[i] = hudLabel(statsFrame, "0", x, 13, 70, 20, 15, TEXT, true)
+end
+local hudFps, hudDec, hudInf, hudLat = statValues[1], statValues[2], statValues[3], statValues[4]
+
+local hudGame = hudLabel(panel, detectedGame(), 14, 144, 170, 16, 10, MUTED, false)
+
+local function hudButton(text, x)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(52, 20)
+    b.Position = UDim2.new(1, x, 1, -32)
+    b.BackgroundColor3 = Color3.fromRGB(53, 47, 76)
+    b.BorderSizePixel = 0
+    b.AutoButtonColor = true
+    b.Text = text
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 9
+    b.TextColor3 = TEXT
+    b.Parent = panel
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 7)
+    c.Parent = b
+    return b
+end
+
+local hudMenuHint = hudLabel(panel, "K MENU", 0, 0, 52, 20, 9, MUTED, false)
+hudMenuHint.Position = UDim2.new(1, -166, 1, -32)
+hudMenuHint.Size = UDim2.fromOffset(96, 20)
+hudMenuHint.TextXAlignment = Enum.TextXAlignment.Right
+hudMenuHint.TextYAlignment = Enum.TextYAlignment.Center
+local botButton = hudButton("BOT", -64)
+
+local function applyHud()
+    local compact = settings.hudLayout == "Compact"
+    panel.Size = UDim2.fromOffset(compact and 270 or 326, compact and 104 or 172)
+    panel.Visible = settings.showHud
+    statsFrame.Visible = not compact
+    hudStatus.Size = UDim2.fromOffset(compact and 246 or 298, compact and 16 or 32)
+    hudStatus.TextWrapped = not compact
+    hudStatus.TextTruncate = compact and Enum.TextTruncate.AtEnd or Enum.TextTruncate.None
+    hudGame.Position = UDim2.new(0, 14, 1, compact and -26 or -28)
+    hudGame.Size = UDim2.fromOffset(compact and 88 or 140, 16)
+    hudScaleObj.Scale = math.clamp(settings.hudScale, 60, 160) / 100
+end
+
+local function resetHud()
+    panel.Position = UDim2.fromOffset(24, 190)
+end
+
+local function placeHud(x, y)
+    local camera = workspace.CurrentCamera
     if camera then
-        local size=camera.ViewportSize
-        x=math.clamp(x,0,math.max(0,size.X-frame.AbsoluteSize.X))
-        y=math.clamp(y,0,math.max(0,size.Y-frame.AbsoluteSize.Y))
+        local viewport = camera.ViewportSize
+        x = math.clamp(x, 0, math.max(0, viewport.X - panel.AbsoluteSize.X))
+        y = math.clamp(y, 0, math.max(0, viewport.Y - panel.AbsoluteSize.Y))
     end
-    frame.Position=UDim2.fromOffset(x,y)
+    panel.Position = UDim2.fromOffset(x, y)
 end
+
 local drag
-connect(header.InputBegan,function(input)
-    if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
-        drag={input=input,start=input.Position,position=frame.AbsolutePosition,touch=input.UserInputType==Enum.UserInputType.Touch}
+connect(header.InputBegan, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        drag = {
+            input = input,
+            start = input.Position,
+            position = panel.AbsolutePosition,
+            touch = input.UserInputType == Enum.UserInputType.Touch,
+        }
     end
 end)
-connect(UIS.InputChanged,function(input)
-    if drag and ((drag.touch and input==drag.input)or(not drag.touch and input.UserInputType==Enum.UserInputType.MouseMovement))then
-        local delta=input.Position-drag.start
-        clampPanel(drag.position.X+delta.X,drag.position.Y+delta.Y)
+connect(UIS.InputChanged, function(input)
+    if not drag then
+        return
+    end
+    if drag.touch and input == drag.input then
+        local delta = input.Position - drag.start
+        placeHud(drag.position.X + delta.X, drag.position.Y + delta.Y)
+    elseif not drag.touch and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - drag.start
+        placeHud(drag.position.X + delta.X, drag.position.Y + delta.Y)
     end
 end)
-connect(UIS.InputEnded,function(input)
-    if drag and(input==drag.input or(not drag.touch and input.UserInputType==Enum.UserInputType.MouseButton1))then drag=nil end
+connect(UIS.InputEnded, function(input)
+    if not drag then
+        return
+    end
+    if input == drag.input or (not drag.touch and input.UserInputType == Enum.UserInputType.MouseButton1) then
+        drag = nil
+    end
 end)
-connect(toggle.Activated,function()
+
+connect(botButton.Activated, function()
     setEnabled(not enabled)
 end)
-connect(UIS.InputBegan,function(input,gameProcessed)
-    if gameProcessed or UIS:GetFocusedTextBox() then return end
-    if input.KeyCode==Enum.KeyCode.Insert then
-        frame.Visible=not frame.Visible
-    elseif input.KeyCode==Enum.KeyCode.F1 then
+
+applyHud()
+
+-- ============================================================ Starlight load
+local Starlight
+do
+    for _, url in ipairs(STARLIGHT_URLS) do
+        local fetched, source = pcall(function()
+            return game:HttpGet(url)
+        end)
+        if fetched and type(source) == "string" and #source > 1000 then
+            local compiled, chunk = pcall(loadstring, source)
+            if compiled and type(chunk) == "function" then
+                local loaded, library = pcall(chunk)
+                if loaded and type(library) == "table" then
+                    Starlight = library
+                    break
+                end
+            end
+        end
+    end
+    if not Starlight then
+        warn("[Experimental] Starlight Interface Suite could not be loaded. HUD and hotkeys remain active.")
+    end
+end
+
+-- ============================================================ default binds
+local enableBind, panicBind, menuBind
+local statusPara, statsPara, modelPara
+
+if Starlight then
+    local okWindow, win = pcall(function()
+        return Starlight:CreateWindow({
+            Name = "EXPERIMENTAL",
+            Subtitle = "Blox League / Turbo Soccer  -  v" .. VERSION,
+            LoadingEnabled = false,
+            BuildWarnings = false,
+            InterfaceAdvertisingPrompts = false,
+            NotifyOnCallbackError = true,
+            DefaultSize = UDim2.fromOffset(640, 430),
+            FileSettings = {
+                RootFolder = "Vunilow",
+                ConfigFolder = "Experimental",
+                ThemeFolder = "Themes",
+            },
+        })
+    end)
+
+    if not okWindow or not win then
+        warn("[Experimental] Starlight window failed: " .. tostring(win))
+        Starlight = nil
+    end
+
+    if Starlight then
+        local okUi, uiError = pcall(function()
+        notify = function(title, content)
+            if not settings.notifications then
+                return
+            end
+            pcall(function()
+                Starlight:Notification({
+                    Title = title,
+                    Content = content,
+                    Duration = 4,
+                })
+            end)
+        end
+
+        local mainSection = win:CreateTabSection("MAIN")
+        local dash = mainSection:CreateTab({ Name = "Dashboard", Columns = 2 }, "dashboard")
+        local session = dash:CreateGroupbox({ Name = "Session", Column = 1 }, "session")
+
+        local enableToggle = session:CreateToggle({
+            Name = "Auto-play bot",
+            CurrentValue = false,
+            Style = 2,
+            Tooltip = "Runs the trained policy in supported matches",
+            Callback = function(value)
+                if syncGuard then
+                    return
+                end
+                setEnabled(value)
+            end,
+        }, "enable")
+
+        session:CreateButton({
+            Name = "Reset session",
+            Style = 2,
+            Tooltip = "Clears the current policy buffer without disabling the bot",
+            Callback = function()
+                if reset then
+                    reset()
+                end
+                notify("Session", "Policy buffer and action history cleared.")
+            end,
+        }, "reset")
+
+        statusPara = session:CreateParagraph({
+            Name = "Status",
+            Content = "Starting up...",
+        }, "status")
+
+        local diagnostics = dash:CreateGroupbox({ Name = "Diagnostics", Column = 2 }, "diagnostics")
+        modelPara = diagnostics:CreateParagraph({
+            Name = "Runtime",
+            Content = "Model loading...",
+        }, "runtime")
+
+        diagnostics:CreateButton({
+            Name = "Copy diagnostics",
+            Style = 2,
+            Callback = function()
+                if not bot.diagnostics then
+                    return
+                end
+                local text = bot.diagnostics()
+                if type(setclipboard) == "function" then
+                    setclipboard(text)
+                    notify("Diagnostics", "Session report copied to the clipboard.")
+                else
+                    warn(text)
+                end
+            end,
+        }, "copy")
+
+        diagnostics:CreateButton({
+            Name = "Reload script",
+            Style = 2,
+            Callback = reloadScript,
+        }, "reload")
+
+        diagnostics:CreateButton({
+            Name = "Unload",
+            Style = 1,
+            Callback = function()
+                if type(env.ExperimentalBotUnload) == "function" then
+                    env.ExperimentalBotUnload()
+                end
+            end,
+        }, "unload")
+
+        local automation = mainSection:CreateTab({ Name = "Automation", Columns = 2 }, "automation")
+        local behaviour = automation:CreateGroupbox({ Name = "Behaviour", Column = 1 }, "behaviour")
+
+        behaviour:CreateToggle({
+            Name = "Auto-enable when ready",
+            CurrentValue = false,
+            Style = 2,
+            Tooltip = "Starts the bot once the model finishes loading",
+            Callback = function(value)
+                settings.autoEnable = value
+                if value and bot.armAutoEnable then
+                    bot.armAutoEnable()
+                end
+            end,
+        }, "auto_enable")
+
+        behaviour:CreateToggle({
+            Name = "Pause while typing",
+            CurrentValue = true,
+            Style = 2,
+            Tooltip = "Stops control output while a text box is focused",
+            Callback = function(value)
+                settings.pauseOnType = value
+                typing = false
+            end,
+        }, "pause_typing")
+
+        local hudGroup = automation:CreateGroupbox({ Name = "HUD", Column = 2 }, "hud_group")
+
+        hudGroup:CreateToggle({
+            Name = "Show HUD",
+            CurrentValue = true,
+            Style = 2,
+            Callback = function(value)
+                settings.showHud = value
+                applyHud()
+            end,
+        }, "hud_visible")
+
+        hudGroup:CreateDropdown({
+            Name = "HUD layout",
+            Options = { "Detailed", "Compact" },
+            CurrentOption = { "Detailed" },
+            Callback = function(selection)
+                local value = type(selection) == "table" and selection[1] or selection
+                if value then
+                    settings.hudLayout = value
+                    applyHud()
+                end
+            end,
+        }, "hud_layout")
+
+        hudGroup:CreateSlider({
+            Name = "HUD scale",
+            Range = { 80, 140 },
+            CurrentValue = 100,
+            Increment = 5,
+            Suffix = "%",
+            Callback = function(value)
+                settings.hudScale = value
+                applyHud()
+            end,
+        }, "hud_scale")
+
+        hudGroup:CreateButton({
+            Name = "Reset HUD position",
+            Style = 2,
+            Callback = function()
+                resetHud()
+                notify("HUD", "Position reset.")
+            end,
+        }, "hud_reset")
+
+        local statsTab = mainSection:CreateTab({ Name = "Stats", Columns = 1 }, "stats")
+        local telemetry = statsTab:CreateGroupbox({ Name = "Live telemetry", Column = 1 }, "telemetry")
+
+        statsPara = telemetry:CreateParagraph({
+            Name = "Session",
+            Content = "Waiting for telemetry...",
+        }, "stats")
+
+        telemetry:CreateButton({
+            Name = "Reset counters",
+            Style = 2,
+            Callback = function()
+                if bot.resetStats then
+                    bot.resetStats()
+                    notify("Stats", "Counters reset.")
+                end
+            end,
+        }, "stats_reset")
+
+        local settingsTab = mainSection:CreateTab({ Name = "Settings", Columns = 2 }, "settings")
+        local keys = settingsTab:CreateGroupbox({ Name = "Keybinds", Column = 1 }, "keys")
+
+        keys:CreateParagraph({
+            Name = "How to rebind",
+            Content = "Click a key field, then press the new key. Changes apply immediately and are saved with your config.",
+        }, "keys_note")
+
+        enableBind = keys:CreateBind({
+            Name = "Toggle bot",
+            CurrentValue = "F1",
+            Callback = function() end,
+        }, "bind_enable")
+
+        panicBind = keys:CreateBind({
+            Name = "Panic (disable)",
+            CurrentValue = "F2",
+            Callback = function() end,
+        }, "bind_panic")
+
+        menuBind = keys:CreateBind({
+            Name = "Menu key",
+            CurrentValue = Starlight.WindowKeybind or "K",
+            Callback = function() end,
+            ChangedCallback = function(key)
+                local okKey, keyCode = pcall(function()
+                    return Enum.KeyCode[key]
+                end)
+                if type(key) ~= "string" or not okKey or not keyCode then
+                    notify("Keybind", "Pick a keyboard key for the menu.")
+                    return
+                end
+                if enableBind and key == enableBind.Values.CurrentValue then
+                    notify("Keybind", "That key already toggles the bot.")
+                    return
+                end
+                if panicBind and key == panicBind.Values.CurrentValue then
+                    notify("Keybind", "That key is the panic key.")
+                    return
+                end
+                Starlight.WindowKeybind = key
+            end,
+        }, "bind_menu")
+
+        local interfaceGroup = settingsTab:CreateGroupbox({ Name = "Interface", Column = 2 }, "interface")
+
+        interfaceGroup:CreateToggle({
+            Name = "Notifications",
+            CurrentValue = true,
+            Style = 2,
+            Callback = function(value)
+                settings.notifications = value
+            end,
+        }, "notifications")
+
+        interfaceGroup:CreateParagraph({
+            Name = "Window",
+            Content = "Use the minimize control in the top bar, or press the menu key shown on the HUD.",
+        }, "window_note")
+
+        local lookSection = win:CreateTabSection("INTERFACE")
+        local themes = lookSection:CreateTab({ Name = "Themes", Columns = 1 }, "themes")
+        themes:BuildThemeGroupbox(1)
+
+        local configs = lookSection:CreateTab({ Name = "Configs", Columns = 1 }, "configs")
+        configs:BuildConfigGroupbox(1)
+
+        local helpSection = win:CreateTabSection("ABOUT")
+        local about = helpSection:CreateTab({ Name = "Information", Columns = 1 }, "about")
+        local aboutGroup = about:CreateGroupbox({ Name = "Experimental " .. VERSION, Column = 1 }, "about_group")
+
+        aboutGroup:CreateParagraph({
+            Name = "What this is",
+            Content = "Neural auto-play for Blox League and Turbo Soccer. The policy is a 10-layer MLP with 90 actions and a 10.45 MB weight set.",
+        }, "about_text")
+
+        aboutGroup:CreateParagraph({
+            Name = "Hotkeys",
+            Content = "F1  toggle bot\nF2  panic disable\nK   open / hide menu (default)",
+        }, "about_keys")
+
+        aboutGroup:CreateButton({
+            Name = "Reload script",
+            Style = 2,
+            Callback = reloadScript,
+        }, "about_reload")
+
+        aboutGroup:CreateParagraph({
+            Name = "Note",
+            Content = "Automation can violate a game's rules. Use on accounts you are willing to risk.",
+        }, "about_note")
+
+        bot.setToggle = function(value)
+            if enableToggle then
+                enableToggle:Set({ CurrentValue = value })
+            end
+        end
+
+        pcall(function()
+            Starlight:LoadAutoloadConfig()
+        end)
+
+        if menuBind and menuBind.Values and type(menuBind.Values.CurrentValue) == "string" then
+            local okKey, keyCode = pcall(function()
+                return Enum.KeyCode[menuBind.Values.CurrentValue]
+            end)
+            if okKey and keyCode then
+                Starlight.WindowKeybind = menuBind.Values.CurrentValue
+            end
+        end
+
+        notify("Experimental " .. VERSION, "Interface loaded. Model is downloading in the background.")
+        end)
+        if not okUi then
+            warn("[Experimental] Interface build failed: " .. tostring(uiError))
+            pcall(function()
+                Starlight:Destroy()
+            end)
+            Starlight = nil
+        end
+    end
+else
+    notify = function() end
+    status("Starlight unavailable - HUD and default binds are active")
+end
+
+booting = false
+
+-- ============================================================ keybinds
+local function keyName(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        return "MB1"
+    end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        return "MB2"
+    end
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        local name = tostring(input.KeyCode)
+        return name:match("KeyCode%.(.+)$") or name
+    end
+    return nil
+end
+
+local function bindValue(bind, fallback)
+    if bind and bind.Values and type(bind.Values.CurrentValue) == "string" then
+        return bind.Values.CurrentValue
+    end
+    return fallback
+end
+
+connect(UIS.InputBegan, function(input, processed)
+    if processed then
+        return
+    end
+    local key = keyName(input)
+    if not key then
+        return
+    end
+    if key == bindValue(enableBind, "F1") then
         setEnabled(not enabled)
+    elseif key == bindValue(panicBind, "F2") then
+        setEnabled(false)
     end
 end)
-
-local uiClock=0
-connect(RunService.Heartbeat,function(dt)
-    uiClock+=dt
-    if uiClock>=.2 then
-        uiClock=0
-        if label.Text~=message then label.Text=message end
-    end
-end)
-
 local generation=0
 local action,job,pending
 local nextTick,lastProgress,lastTick=0,0,nil
@@ -200,6 +729,7 @@ unload=function()
     end
     table.clear(hooked)
     if env.ExperimentalBotUnload==unload then env.ExperimentalBotUnload=nil end
+    if Starlight and Starlight.Instance then pcall(function() Starlight:Destroy() end) end
     gui:Destroy()
 end
 env.ExperimentalBotUnload=unload
@@ -651,7 +1181,7 @@ end)()
         install(input,"Read",function(original)
             return function(...)
                 local controls=original(...)
-                if not alive or not enabled or not ready or blocked or not P or not P.localCarId then return controls end
+                if not alive or not enabled or not ready or blocked or typing or not P or not P.localCarId then return controls end
                 local now=os.clock()
                 local own=P:LocalCar()
                 if not own or own~=carIdentity or P~=identity or P.arena~=arenaIdentity or own.state and own.state.isDemoed then return controls end
@@ -826,4 +1356,161 @@ if alive then
     task.wait(2)
 end
 end
+end)
+-- ============================================================ telemetry / HUD
+local autoEnabled = false
+local readyAnnounced = false
+local lastUi = 0
+local lastParagraph = 0
+local fpsSmooth = 1 / 60
+
+bot.resetStats = function()
+    decisions = 0
+    computeMs = 0
+    latencyMs = 0
+end
+
+bot.armAutoEnable = function()
+    autoEnabled = false
+end
+
+bot.diagnostics = function()
+    local executor = "unknown"
+    local okName, name = pcall(function()
+        if type(identifyexecutor) == "function" then
+            return identifyexecutor()
+        end
+        return "unknown"
+    end)
+    if okName and type(name) == "string" then
+        executor = name
+    end
+    return table.concat({
+        "Experimental " .. VERSION,
+        "Game: " .. detectedGame() .. " (" .. tostring(game.PlaceId) .. ")",
+        "Enabled: " .. tostring(enabled),
+        "Model ready: " .. tostring(ready),
+        "Status: " .. tostring(message),
+        "Decisions: " .. tostring(decisions),
+        "Inference: " .. string.format("%.2f ms", computeMs),
+        "Latency: " .. string.format("%.1f ms", latencyMs),
+        "Uptime: " .. uptime(),
+        "HUD: " .. settings.hudLayout .. " @ " .. tostring(settings.hudScale) .. "%",
+        "Pause on type: " .. tostring(settings.pauseOnType),
+        "Executor: " .. executor,
+    }, "\n")
+end
+
+local function setHudState(text, color)
+    hudState.Text = text
+    hudState.TextColor3 = color
+    hudDot.BackgroundColor3 = color
+end
+
+connect(RunService.Heartbeat, function(dt)
+    typing = settings.pauseOnType and (UIS:GetFocusedTextBox() ~= nil) or false
+    if not alive then
+        return
+    end
+
+    fpsSmooth = fpsSmooth * 0.92 + math.min(dt, 0.1) * 0.08
+
+    if settings.autoEnable and ready and not autoEnabled then
+        autoEnabled = true
+        if not enabled then
+            setEnabled(true, true)
+            notify("Auto-play", "Model ready - bot enabled automatically.")
+        end
+    end
+
+    if ready and not readyAnnounced then
+        readyAnnounced = true
+        notify("Model ready", "The policy is loaded. Join a supported match to start.")
+    end
+
+    local now = os.clock()
+    if now - lastUi < 0.15 then
+        return
+    end
+    lastUi = now
+
+    local fps = math.floor(1 / math.max(fpsSmooth, 0.0001) + 0.5)
+    local statusText = message
+    if typing and enabled then
+        statusText = "PAUSED - text box focused"
+    end
+    hudStatus.Text = statusText
+
+    hudFps.Text = tostring(fps)
+    hudDec.Text = tostring(decisions)
+    hudInf.Text = string.format("%.1f", computeMs)
+    hudLat.Text = string.format("%.0f", latencyMs)
+    hudGame.Text = detectedGame()
+    hudMenuHint.Text = tostring((Starlight and Starlight.WindowKeybind) or "K") .. " MENU"
+
+    if not enabled then
+        setHudState("IDLE", MUTED)
+    elseif typing then
+        setHudState("PAUSED", AMBER)
+    elseif blocked then
+        setHudState("PAUSED", AMBER)
+    elseif ready then
+        setHudState("LIVE", GREEN)
+    else
+        setHudState("LOADING", AMBER)
+    end
+
+    if now - lastParagraph < 0.5 then
+        return
+    end
+    lastParagraph = now
+
+    local paragraphStatus = message
+    if typing and enabled then
+        paragraphStatus = "PAUSED - text box focused"
+    end
+
+    if statusPara then
+        pcall(function()
+            statusPara:Set({ Content = paragraphStatus })
+        end)
+    end
+
+    if statsPara then
+        pcall(function()
+            statsPara:Set({
+                Content = string.format(
+                    "Status      %s\nEnabled     %s\nFPS         %d\nDecisions   %d\nInference   %.2f ms\nLatency     %.1f ms\nUptime      %s",
+                    paragraphStatus,
+                    enabled and "yes" or "no",
+                    fps,
+                    decisions,
+                    computeMs,
+                    latencyMs,
+                    uptime()
+                ),
+            })
+        end)
+    end
+
+    if modelPara then
+        local pauseReason = "no"
+        if typing and enabled then
+            pauseReason = "yes (typing)"
+        elseif blocked then
+            pauseReason = "yes (game)"
+        end
+        pcall(function()
+            modelPara:Set({
+                Content = string.format(
+                    "Game        %s\nPlaceId     %d\nModel       %s\nPolicy      10-layer MLP / 90 actions\nPaused      %s\nGame mode   %s",
+                    detectedGame(),
+                    game.PlaceId,
+                    ready and "ready - 10.45 MB" or "loading...",
+                    pauseReason,
+                    enabled and "auto-play" or "manual"
+                ),
+            })
+        end)
+    end
 end)
