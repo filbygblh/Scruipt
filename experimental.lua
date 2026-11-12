@@ -1,14 +1,12 @@
 --!native
 --!optimize 2
--- Experimental v3.1.0 -- native full menu edition.
+-- Experimental v3.2.0 -- compact widget edition.
 -- Blox League / Turbo Soccer.
--- The policy, model loader and hook layer are the v0.2.1 core, unchanged apart
--- from a real typing guard. The interface is built from Instances only.
+-- The policy core is the v0.2.1 model/hook layer with the typing guard.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
-local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local LP = Players.LocalPlayer
@@ -16,11 +14,10 @@ local env = type(getgenv) == "function" and getgenv() or _G
 
 if type(env.ExperimentalBotUnload) == "function" then pcall(env.ExperimentalBotUnload) end
 
-local VERSION = "3.1.0"
+local VERSION = "3.2.0"
 local SCRIPT_URL = "https://raw.githubusercontent.com/filbygblh/Scruipt/refs/heads/main/experimental.lua"
 local FOLDER = "Vunilow/Experimental"
-local CONFIG_DIR = FOLDER .. "/configs"
-local AUTOSAVE_PATH = FOLDER .. "/settings.json"
+local SETTINGS_PATH = FOLDER .. "/widget.json"
 
 local alive, enabled, ready = false, false, false
 alive = true
@@ -30,28 +27,18 @@ local typing = false
 local reset
 local startedAt = os.clock()
 local bot = {}
-local ui = { setters = {} }
-local tabs = {}
-local statValues = {}
-local toastText, toastUntil = "", 0
+local ui = { bindButtons = {} }
 local capturing
 local gui
-local notify = function() end
-local refreshConfigs = function() end
-local syncUiFromSettings = function() end
-local updateHints = function() end
+local setEnabled
 local beginCapture
 local cancelCapture
-local finishCapture
 
 local settings = {
-    autoEnable = false,
     pauseOnType = true,
-    notifications = true,
+    bindMenu = "Insert",
     bindToggle = "F1",
     bindPanic = "F2",
-    bindMenu = "Insert",
-    menuScale = 1,
 }
 
 local function connect(signal, callback)
@@ -91,318 +78,62 @@ local function ensureFolder(path)
     end
 end
 
-local function ensureBase()
-    ensureFolder("Vunilow")
-    ensureFolder(FOLDER)
-end
-
-local function readJson(path)
+local function loadSettings()
     if not hasFileApi() then
-        return nil
+        return
     end
-    local okFile, exists = pcall(isfile, path)
+    local okFile, exists = pcall(isfile, SETTINGS_PATH)
     if not okFile or not exists then
-        return nil
+        return
     end
-    local okRead, content = pcall(readfile, path)
+    local okRead, content = pcall(readfile, SETTINGS_PATH)
     if not okRead or type(content) ~= "string" then
-        return nil
+        return
     end
     local okDecode, data = pcall(function()
         return HttpService:JSONDecode(content)
     end)
-    if okDecode and type(data) == "table" then
-        return data
-    end
-    return nil
-end
-
-local function writeJson(path, data)
-    if not hasFileApi() then
-        return false
-    end
-    local okEncode, content = pcall(function()
-        return HttpService:JSONEncode(data)
-    end)
-    if not okEncode then
-        return false
-    end
-    return pcall(writefile, path, content)
-end
-
-local function settingsSnapshot()
-    return {
-        autoEnable = settings.autoEnable,
-        pauseOnType = settings.pauseOnType,
-        notifications = settings.notifications,
-        bindToggle = settings.bindToggle,
-        bindPanic = settings.bindPanic,
-        bindMenu = settings.bindMenu,
-        menuScale = settings.menuScale,
-    }
-end
-
-local function mergeSettings(data)
-    if type(data) ~= "table" then
+    if not okDecode or type(data) ~= "table" then
         return
     end
-    if type(data.autoEnable) == "boolean" then settings.autoEnable = data.autoEnable end
     if type(data.pauseOnType) == "boolean" then settings.pauseOnType = data.pauseOnType end
-    if type(data.notifications) == "boolean" then settings.notifications = data.notifications end
+    if type(data.bindMenu) == "string" and data.bindMenu ~= "" then settings.bindMenu = data.bindMenu end
     if type(data.bindToggle) == "string" and data.bindToggle ~= "" then settings.bindToggle = data.bindToggle end
     if type(data.bindPanic) == "string" and data.bindPanic ~= "" then settings.bindPanic = data.bindPanic end
-    if type(data.bindMenu) == "string" and data.bindMenu ~= "" then settings.bindMenu = data.bindMenu end
-    if type(data.menuScale) == "number" then
-        settings.menuScale = math.clamp(data.menuScale, 0.8, 1.15)
-    end
 end
 
-local function autosave()
+local function saveSettings()
     if not hasFileApi() then
         return
     end
-    ensureBase()
-    writeJson(AUTOSAVE_PATH, settingsSnapshot())
-end
-
-mergeSettings(readJson(AUTOSAVE_PATH))
-
-local function listConfigs()
-    if not hasFileApi() or type(listfiles) ~= "function" then
-        return {}
-    end
-    local ok, files = pcall(listfiles, CONFIG_DIR)
-    if not ok or type(files) ~= "table" then
-        return {}
-    end
-    local names = {}
-    for _, path in ipairs(files) do
-        local base = tostring(path):match("([^/\\]+)$") or tostring(path)
-        if base:sub(-5) == ".json" then
-            names[#names + 1] = base:sub(1, -6)
-        end
-    end
-    return names
-end
-
-local function saveNamed(rawName)
-    local name = tostring(rawName or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if name == "" then
-        notify("Enter a profile name first.")
-        return
-    end
-    if #name > 32 then
-        notify("Profile names are limited to 32 characters.")
-        return
-    end
-    if name:find("[^%w%s_%-]") then
-        notify("Use letters, numbers, spaces, _ or - only.")
-        return
-    end
-    if not hasFileApi() then
-        notify("This executor has no file API, so profiles cannot be saved.")
-        return
-    end
-    ensureBase()
-    ensureFolder(CONFIG_DIR)
-    if writeJson(CONFIG_DIR .. "/" .. name .. ".json", settingsSnapshot()) then
-        autosave()
-        refreshConfigs()
-        notify("Saved profile '" .. name .. "'.")
-    else
-        notify("Could not write the profile file.")
-    end
-end
-
-local function loadNamed(name)
-    local data = readJson(CONFIG_DIR .. "/" .. tostring(name) .. ".json")
-    if not data then
-        notify("Could not read that profile.")
-        return
-    end
-    mergeSettings(data)
-    syncUiFromSettings()
-    autosave()
-    notify("Loaded profile '" .. tostring(name) .. "'.")
-end
-
-local function deleteNamed(name)
-    if type(delfile) ~= "function" then
-        notify("This executor cannot delete files.")
-        return
-    end
-    if pcall(delfile, CONFIG_DIR .. "/" .. tostring(name) .. ".json") then
-        refreshConfigs()
-        notify("Deleted profile '" .. tostring(name) .. "'.")
-    else
-        notify("Could not delete that profile.")
-    end
-end
-
-local function setEnabled(value, silent)
-    value = value and true or false
-    enabled = value
-    if reset then
-        reset()
-        status(value and (ready and "ON - Waiting for live match" or "ON - Loading model") or "OFF - Ready")
-    end
-    if ui.dashboardSet then
-        ui.dashboardSet(value)
-    end
-    if not silent then
-        notify(value and "Auto-play enabled" or "Auto-play disabled")
-    end
-end
-
-local function reloadScript()
-    if type(env.ExperimentalBotUnload) == "function" then
-        pcall(env.ExperimentalBotUnload)
-    end
-    task.defer(function()
-        local ok, err = pcall(function()
-            local chunk = loadstring(game:HttpGet(SCRIPT_URL))
-            assert(type(chunk) == "function", "download failed")
-            chunk()
-        end)
-        if not ok then
-            warn("[Experimental] Reload failed: " .. tostring(err))
-        end
+    ensureFolder("Vunilow")
+    ensureFolder(FOLDER)
+    local ok, encoded = pcall(function()
+        return HttpService:JSONEncode({
+            pauseOnType = settings.pauseOnType,
+            bindMenu = settings.bindMenu,
+            bindToggle = settings.bindToggle,
+            bindPanic = settings.bindPanic,
+        })
     end)
-end
-
-local function unloadScript()
-    if type(env.ExperimentalBotUnload) == "function" then
-        env.ExperimentalBotUnload()
+    if ok then
+        pcall(writefile, SETTINGS_PATH, encoded)
     end
 end
 
-local function copyDiagnostics()
-    if not bot.diagnostics then
-        notify("Diagnostics are not ready yet.")
-        return
-    end
-    local text = bot.diagnostics()
-    if type(setclipboard) == "function" then
-        pcall(setclipboard, text)
-        notify("Diagnostics copied to the clipboard.")
-    else
-        warn(text)
-        notify("Clipboard unavailable; printed diagnostics to the console.")
-    end
-end
+loadSettings()
 
-local function copyLoadstring()
-    if type(setclipboard) ~= "function" then
-        notify("Clipboard write is unavailable.")
-        return
-    end
-    pcall(setclipboard, 'loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))()')
-    notify("Loadstring copied to the clipboard.")
-end
-
-local function resetSettings()
-    settings.autoEnable = false
-    settings.pauseOnType = true
-    settings.notifications = true
-    settings.bindToggle = "F1"
-    settings.bindPanic = "F2"
-    settings.bindMenu = "Insert"
-    settings.menuScale = 1
-    syncUiFromSettings()
-    autosave()
-    notify("Settings restored to defaults.")
-end
-
-local BIND_LABELS = {
-    bindToggle = "toggle bot",
-    bindPanic = "panic disable",
-    bindMenu = "menu",
-}
-
-local function keyName(input)
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then
-        return nil
-    end
-    local name = tostring(input.KeyCode)
-    return name:match("KeyCode%.(.+)$") or name
-end
-
-beginCapture = function(kind, button)
-    if capturing and capturing.button then
-        capturing.button.Text = tostring(settings[capturing.kind] or "?")
-        capturing.button.TextColor3 = Color3.fromRGB(239, 237, 255)
-    end
-    capturing = { kind = kind, button = button }
-    button.Text = "Press a key..."
-    button.TextColor3 = Color3.fromRGB(151, 111, 255)
-end
-
-cancelCapture = function()
-    if capturing then
-        capturing.button.Text = tostring(settings[capturing.kind] or "?")
-        capturing.button.TextColor3 = Color3.fromRGB(239, 237, 255)
-        capturing = nil
-    end
-end
-
-finishCapture = function(key)
-    if not capturing then
-        return
-    end
-    local kind = capturing.kind
-    local button = capturing.button
-    capturing = nil
-    button.TextColor3 = Color3.fromRGB(239, 237, 255)
-    if key == "Escape" then
-        button.Text = tostring(settings[kind] or "?")
-        return
-    end
-    for _, other in ipairs({ "bindToggle", "bindPanic", "bindMenu" }) do
-        if other ~= kind and settings[other] == key then
-            button.Text = tostring(settings[kind] or "?")
-            notify("That key is already bound to " .. tostring(BIND_LABELS[other] or other) .. ".")
-            return
-        end
-    end
-    settings[kind] = key
-    if ui.setters[kind] then
-        pcall(ui.setters[kind], key)
-    end
-    autosave()
-    updateHints()
-    notify("Bound " .. tostring(BIND_LABELS[kind] or kind) .. " to " .. key .. ".")
-end
-
-local function setSetting(key, value)
-    settings[key] = value
-    if ui.setters[key] then
-        pcall(ui.setters[key], value)
-    end
-    autosave()
-end
--- ============================================================ v3.1.0 native menu
-local function buildMenu()
 local BG = Color3.fromRGB(15, 17, 24)
-local PANEL = Color3.fromRGB(20, 23, 33)
-local CARD = Color3.fromRGB(26, 30, 43)
-local CARD2 = Color3.fromRGB(32, 36, 52)
-local STROKE = Color3.fromRGB(58, 52, 86)
+local PANEL = Color3.fromRGB(22, 25, 36)
+local CARD = Color3.fromRGB(30, 34, 48)
+local STROKE = Color3.fromRGB(60, 54, 90)
 local ACCENT = Color3.fromRGB(151, 111, 255)
-local ACCENT_DIM = Color3.fromRGB(80, 62, 140)
-local TEXT = Color3.fromRGB(239, 237, 255)
-local MUTED = Color3.fromRGB(139, 143, 165)
+local TEXT = Color3.fromRGB(240, 238, 255)
+local MUTED = Color3.fromRGB(142, 146, 170)
 local GREEN = Color3.fromRGB(74, 222, 128)
 local AMBER = Color3.fromRGB(251, 191, 36)
+local BLUE = Color3.fromRGB(96, 165, 250)
 local RED = Color3.fromRGB(190, 70, 90)
-local OFF = Color3.fromRGB(52, 56, 74)
-
-local MENU_W, MENU_H = 780, 540
-local SIDEBAR_W = 190
-local CONTENT_W = MENU_W - SIDEBAR_W
-local SCROLL_W = 550
-local CARD_W = 540
-local CARD_INNER = 512
-local FOOTER_H = 34
 
 local function new(className, props)
     local object = Instance.new(className)
@@ -420,23 +151,7 @@ local function corner(object, radius)
     return item
 end
 
-local function stroke(object, color, transparency, thickness)
-    local item = new("UIStroke", {
-        Color = color or STROKE,
-        Transparency = transparency or 0.35,
-        Thickness = thickness or 1,
-    })
-    item.Parent = object
-    return item
-end
-
-local function append(parent, child)
-    child.LayoutOrder = #parent:GetChildren() + 1
-    child.Parent = parent
-    return child
-end
-
-local function textLabel(parent, text, x, y, width, height, size, color, bold, wrap)
+local function label(parent, text, x, y, width, height, size, color, bold, wrap)
     local item = new("TextLabel", {
         BackgroundTransparency = 1,
         Position = UDim2.fromOffset(x, y),
@@ -449,14 +164,12 @@ local function textLabel(parent, text, x, y, width, height, size, color, bold, w
         TextYAlignment = Enum.TextYAlignment.Top,
         TextWrapped = wrap or false,
     })
-    if parent then
-        item.Parent = parent
-    end
+    item.Parent = parent
     return item
 end
 
 gui = new("ScreenGui", {
-    Name = "ExperimentalMenu",
+    Name = "ExperimentalWidget",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
     DisplayOrder = 80,
@@ -465,138 +178,228 @@ gui = new("ScreenGui", {
 })
 gui.Parent = LP:WaitForChild("PlayerGui")
 
-local menu = new("Frame", {
-    Name = "Window",
+local widget = new("Frame", {
+    Name = "Widget",
     AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.fromScale(0.5, 0.5),
-    Size = UDim2.fromOffset(MENU_W, MENU_H),
+    Size = UDim2.fromOffset(330, 244),
     BackgroundColor3 = BG,
     BorderSizePixel = 0,
-    ClipsDescendants = true,
 })
-menu.Parent = gui
-corner(menu, 16)
-stroke(menu, STROKE, 0.25, 1)
+widget.Parent = gui
+corner(widget, 14)
+local outline = new("UIStroke", { Color = STROKE, Transparency = 0.25, Thickness = 1 })
+outline.Parent = widget
 
-ui.scale = new("UIScale", { Scale = settings.menuScale })
-ui.scale.Parent = menu
-
-local accentLine = new("Frame", {
-    Size = UDim2.fromOffset(MENU_W - 28, 3),
+local accent = new("Frame", {
+    Size = UDim2.fromOffset(302, 2),
     Position = UDim2.fromOffset(14, 0),
     BackgroundColor3 = ACCENT,
     BorderSizePixel = 0,
 })
-accentLine.Parent = menu
-corner(accentLine, 2)
+accent.Parent = widget
+corner(accent, 1)
 
-local setMenu
 local header = new("Frame", {
-    Size = UDim2.fromOffset(MENU_W, 76),
+    Size = UDim2.fromOffset(330, 48),
     BackgroundTransparency = 1,
     Active = true,
 })
-header.Parent = menu
+header.Parent = widget
+label(header, "EXPERIMENTAL", 14, 12, 180, 18, 12, TEXT, true, false)
+label(header, "widget  //  v" .. VERSION, 14, 29, 180, 12, 8, MUTED, false, false)
+local autoChip = new("TextLabel", {
+    Position = UDim2.fromOffset(236, 16),
+    Size = UDim2.fromOffset(38, 16),
+    BackgroundColor3 = Color3.fromRGB(64, 52, 96),
+    Text = "AUTO",
+    TextSize = 7,
+    Font = Enum.Font.GothamBold,
+    TextColor3 = ACCENT,
+    TextXAlignment = Enum.TextXAlignment.Center,
+    TextYAlignment = Enum.TextYAlignment.Center,
+})
+autoChip.Parent = header
+corner(autoChip, 5)
 
-textLabel(header, "EXPERIMENTAL", 24, 16, 320, 24, 18, TEXT, true, false)
-textLabel(header, "Blox League / Turbo Soccer  -  v" .. VERSION, 24, 42, 460, 16, 10, MUTED, false, false)
-
-local closeButton = new("TextButton", {
-    Size = UDim2.fromOffset(32, 32),
-    Position = UDim2.new(1, -48, 0, 22),
-    BackgroundTransparency = 1,
+local hideButton = new("TextButton", {
+    Position = UDim2.fromOffset(284, 12),
+    Size = UDim2.fromOffset(32, 24),
+    BackgroundColor3 = CARD,
     Text = "X",
     Font = Enum.Font.GothamBold,
-    TextSize = 16,
+    TextSize = 11,
     TextColor3 = MUTED,
     AutoButtonColor = false,
 })
-closeButton.Parent = header
-closeButton.Activated:Connect(function()
+hideButton.Parent = header
+corner(hideButton, 7)
+
+local statusCard = new("Frame", {
+    Position = UDim2.fromOffset(14, 54),
+    Size = UDim2.fromOffset(302, 54),
+    BackgroundColor3 = PANEL,
+    BorderSizePixel = 0,
+})
+statusCard.Parent = widget
+corner(statusCard, 9)
+
+ui.dot = new("Frame", {
+    Position = UDim2.fromOffset(12, 12),
+    Size = UDim2.fromOffset(8, 8),
+    BackgroundColor3 = MUTED,
+    BorderSizePixel = 0,
+})
+ui.dot.Parent = statusCard
+corner(ui.dot, 4)
+ui.status = label(statusCard, "STANDBY", 28, 7, 250, 18, 12, TEXT, true, false)
+ui.details = label(statusCard, "Waiting for startup.", 28, 26, 262, 22, 8, MUTED, false, true)
+
+local control = new("TextButton", {
+    Position = UDim2.fromOffset(14, 116),
+    Size = UDim2.fromOffset(302, 34),
+    BackgroundColor3 = ACCENT,
+    Text = "START BOT",
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+    TextColor3 = Color3.fromRGB(255, 255, 255),
+    AutoButtonColor = false,
+})
+control.Parent = widget
+corner(control, 8)
+ui.control = control
+control.Activated:Connect(function()
+    setEnabled(not enabled)
+end)
+
+local bindCard = new("Frame", {
+    Position = UDim2.fromOffset(14, 158),
+    Size = UDim2.fromOffset(302, 58),
+    BackgroundColor3 = PANEL,
+    BorderSizePixel = 0,
+})
+bindCard.Parent = widget
+corner(bindCard, 9)
+
+label(bindCard, "Menu key", 12, 8, 140, 14, 8, MUTED, true, false)
+label(bindCard, "Bot key", 12, 32, 140, 14, 8, MUTED, true, false)
+
+local function bindButton(kind, y)
+    local button = new("TextButton", {
+        Position = UDim2.fromOffset(204, y),
+        Size = UDim2.fromOffset(84, 22),
+        BackgroundColor3 = CARD,
+        Text = tostring(settings[kind] or "?"),
+        Font = Enum.Font.GothamBold,
+        TextSize = 8,
+        TextColor3 = TEXT,
+        AutoButtonColor = false,
+    })
+    button.Parent = bindCard
+    corner(button, 6)
+    button.Activated:Connect(function()
+        beginCapture(kind, button)
+    end)
+    ui.bindButtons[kind] = button
+    return button
+end
+
+bindButton("bindMenu", 4)
+bindButton("bindToggle", 28)
+
+ui.footer = label(widget, "", 14, 222, 302, 14, 8, MUTED, false, false)
+
+local function updateHint()
+    ui.footer.Text = tostring(settings.bindMenu) .. " hide  |  " .. tostring(settings.bindToggle) .. " toggle"
+    if ui.bindButtons.bindMenu then ui.bindButtons.bindMenu.Text = tostring(settings.bindMenu) end
+    if ui.bindButtons.bindToggle then ui.bindButtons.bindToggle.Text = tostring(settings.bindToggle) end
+end
+
+local function setMenu(open)
+    gui.Enabled = open and true or false
+    if not gui.Enabled and cancelCapture then
+        cancelCapture()
+    end
+end
+ui.setMenu = setMenu
+
+hideButton.Activated:Connect(function()
     setMenu(false)
 end)
-closeButton.MouseEnter:Connect(function()
-    closeButton.TextColor3 = TEXT
-end)
-closeButton.MouseLeave:Connect(function()
-    closeButton.TextColor3 = MUTED
-end)
 
-local headerLine = new("Frame", {
-    Size = UDim2.fromOffset(MENU_W, 1),
-    Position = UDim2.fromOffset(0, 75),
-    BackgroundColor3 = CARD2,
-    BorderSizePixel = 0,
-})
-headerLine.Parent = menu
+beginCapture = function(kind, button)
+    if capturing and capturing.button then
+        capturing.button.Text = tostring(settings[capturing.kind] or "?")
+        capturing.button.TextColor3 = TEXT
+    end
+    capturing = { kind = kind, button = button }
+    button.Text = "Press a key..."
+    button.TextColor3 = ACCENT
+end
+ui.beginCapture = beginCapture
 
-local sidebar = new("Frame", {
-    Position = UDim2.fromOffset(0, 76),
-    Size = UDim2.fromOffset(SIDEBAR_W, MENU_H - 76 - FOOTER_H),
-    BackgroundColor3 = PANEL,
-    BackgroundTransparency = 0.25,
-    BorderSizePixel = 0,
-})
-sidebar.Parent = menu
-corner(sidebar, 12)
+cancelCapture = function()
+    if capturing then
+        capturing.button.Text = tostring(settings[capturing.kind] or "?")
+        capturing.button.TextColor3 = TEXT
+        capturing = nil
+    end
+end
+ui.cancelCapture = cancelCapture
 
-local sidebarLine = new("Frame", {
-    Position = UDim2.fromOffset(SIDEBAR_W - 1, 76),
-    Size = UDim2.fromOffset(1, MENU_H - 76 - FOOTER_H),
-    BackgroundColor3 = CARD2,
-    BorderSizePixel = 0,
-})
-sidebarLine.Parent = menu
+local function keyName(input)
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then
+        return nil
+    end
+    local name = tostring(input.KeyCode)
+    return name:match("KeyCode%.(.+)$") or name
+end
 
-textLabel(sidebar, "NAVIGATION", 18, 8, 150, 12, 8, MUTED, true, false)
-textLabel(sidebar, "v" .. VERSION, 18, 398, 150, 14, 9, MUTED, false, false)
+local function finishCapture(key)
+    if not capturing then
+        return
+    end
+    local kind = capturing.kind
+    local button = capturing.button
+    capturing = nil
+    button.TextColor3 = TEXT
+    if key == "Escape" then
+        button.Text = tostring(settings[kind] or "?")
+        return
+    end
+    for _, other in ipairs({ "bindMenu", "bindToggle", "bindPanic" }) do
+        if other ~= kind and settings[other] == key then
+            button.Text = tostring(settings[kind] or "?")
+            status("That key is already in use.")
+            return
+        end
+    end
+    settings[kind] = key
+    button.Text = key
+    saveSettings()
+    updateHint()
+    status("Bound " .. (kind == "bindMenu" and "menu" or kind == "bindToggle" and "bot toggle" or "panic") .. " to " .. key .. ".")
+end
+ui.finishCapture = finishCapture
 
-local content = new("Frame", {
-    Position = UDim2.fromOffset(SIDEBAR_W, 76),
-    Size = UDim2.fromOffset(CONTENT_W, MENU_H - 76 - FOOTER_H),
-    BackgroundTransparency = 1,
-})
-content.Parent = menu
+setEnabled = function(value, silent)
+    value = value and true or false
+    enabled = value
+    if reset then
+        reset()
+        status(value and (ready and "ON - Waiting for live match" or "ON - Loading model") or "OFF - Ready")
+    end
+    control.Text = value and "STOP BOT" or "START BOT"
+    control.BackgroundColor3 = value and RED or ACCENT
+end
+ui.setEnabled = setEnabled
 
-ui.pageTitle = textLabel(content, "Dashboard", 20, 14, 520, 24, 16, TEXT, true, false)
-ui.pageSubtitle = textLabel(content, "", 20, 38, 520, 16, 9, MUTED, false, true)
-
-local scroll = new("ScrollingFrame", {
-    Position = UDim2.fromOffset(20, 62),
-    Size = UDim2.fromOffset(SCROLL_W, 400),
-    BackgroundTransparency = 1,
-    BorderSizePixel = 0,
-    ScrollBarThickness = 4,
-    ScrollBarImageColor3 = ACCENT_DIM,
-    CanvasSize = UDim2.new(0, 0, 0, 0),
-    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    ScrollingDirection = Enum.ScrollingDirection.Y,
-})
-scroll.Parent = content
-ui.scroll = scroll
-local scrollLayout = new("UIListLayout", { Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder })
-scrollLayout.Parent = scroll
-
-local footer = new("Frame", {
-    Position = UDim2.fromOffset(0, MENU_H - FOOTER_H),
-    Size = UDim2.fromOffset(MENU_W, FOOTER_H),
-    BackgroundColor3 = PANEL,
-    BackgroundTransparency = 0.2,
-    BorderSizePixel = 0,
-})
-footer.Parent = menu
-corner(footer, 12)
-local footerLine = new("Frame", { Size = UDim2.fromOffset(MENU_W, 1), BackgroundColor3 = CARD2, BorderSizePixel = 0 })
-footerLine.Parent = footer
-
-ui.footerStatus = textLabel(footer, message, 20, 9, 540, 16, 10, MUTED, false, false)
-ui.footerHint = textLabel(footer, tostring(settings.bindMenu) .. "  close", MENU_W - 180, 9, 160, 16, 10, MUTED, false, false)
-ui.footerHint.TextXAlignment = Enum.TextXAlignment.Right
+updateHint()
 
 local drag
 connect(header.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        drag = { input = input, start = input.Position, position = menu.AbsolutePosition, touch = input.UserInputType == Enum.UserInputType.Touch }
+        drag = { input = input, start = input.Position, position = widget.AbsolutePosition, touch = input.UserInputType == Enum.UserInputType.Touch }
     end
 end)
 connect(UIS.InputChanged, function(input)
@@ -606,515 +409,16 @@ connect(UIS.InputChanged, function(input)
     local delta = input.Position - drag.start
     local camera = workspace.CurrentCamera
     local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
-    local size = menu.AbsoluteSize
+    local size = widget.AbsoluteSize
     local x = math.clamp(drag.position.X + delta.X, 0, math.max(0, viewport.X - size.X))
     local y = math.clamp(drag.position.Y + delta.Y, 0, math.max(0, viewport.Y - size.Y))
-    menu.Position = UDim2.fromOffset(x + size.X * 0.5, y + size.Y * 0.5)
+    widget.Position = UDim2.fromOffset(x + size.X * 0.5, y + size.Y * 0.5)
 end)
 connect(UIS.InputEnded, function(input)
     if drag and (input == drag.input or (not drag.touch and input.UserInputType == Enum.UserInputType.MouseButton1)) then
         drag = nil
     end
 end)
-
-notify = function(text, duration)
-    if not settings.notifications then
-        return
-    end
-    toastText = tostring(text)
-    toastUntil = os.clock() + (duration or 3)
-    ui.footerStatus.Text = toastText
-end
-
-local selectTab
-local activeTab = 1
-local pageSubtitles = {
-    "Live control and session overview.",
-    "Startup behavior and input safety.",
-    "Appearance, keybinds and defaults.",
-    "Saved settings profiles.",
-    "Session counters from the policy loop.",
-    "Build details and diagnostics.",
-}
-
-local function addTab(name, title)
-    local index = #tabs + 1
-    local page = new("Frame", {
-        Size = UDim2.fromOffset(SCROLL_W, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundTransparency = 1,
-        Visible = false,
-    })
-    local layout = new("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder })
-    layout.Parent = page
-    tabs[index] = { page = page, title = title, button = nil }
-    local button = new("TextButton", {
-        Size = UDim2.fromOffset(166, 38),
-        Position = UDim2.fromOffset(12, 26 + (index - 1) * 46),
-        BackgroundColor3 = ACCENT_DIM,
-        BackgroundTransparency = 1,
-        Text = "",
-        AutoButtonColor = false,
-        ClipsDescendants = true,
-    })
-    button.Parent = sidebar
-    corner(button, 9)
-    local bar = new("Frame", {
-        Size = UDim2.fromOffset(3, 16),
-        Position = UDim2.fromOffset(0, 11),
-        BackgroundColor3 = ACCENT,
-        BorderSizePixel = 0,
-        Visible = false,
-    })
-    bar.Parent = button
-    corner(bar, 2)
-    local label = textLabel(button, name, 16, 9, 140, 20, 11, MUTED, true, false)
-    tabs[index].button = button
-    tabs[index].bar = bar
-    tabs[index].label = label
-    button.Activated:Connect(function()
-        selectTab(index)
-    end)
-    return page
-end
-
-selectTab = function(index)
-    activeTab = index
-    for i, tab in ipairs(tabs) do
-        local on = i == index
-        tab.page.Visible = on
-        if on then
-            tab.page.Parent = scroll
-            tab.page.LayoutOrder = 1
-            ui.pageTitle.Text = tab.title
-            ui.pageSubtitle.Text = pageSubtitles[index] or ""
-        else
-            tab.page.Parent = nil
-        end
-        tab.bar.Visible = on
-        tab.button.BackgroundTransparency = on and 0.82 or 1
-        tab.label.TextColor3 = on and TEXT or MUTED
-    end
-    scroll.CanvasPosition = Vector2.new(0, 0)
-    if index == 4 then
-        refreshConfigs()
-    end
-end
-
-setMenu = function(open)
-    gui.Enabled = open and true or false
-    if not gui.Enabled then
-        cancelCapture()
-    else
-        if ui.refreshConfigs then pcall(ui.refreshConfigs) end
-    end
-end
-ui.setMenu = setMenu
-
-local function row(parent, title, desc, reserve, height)
-    local item = new("Frame", { Size = UDim2.fromOffset(CARD_INNER, height or 52), BackgroundTransparency = 1 })
-    if parent then
-        append(parent, item)
-    end
-    local width = CARD_INNER - (reserve or 150)
-    textLabel(item, title, 0, 2, width, 18, 11, TEXT, true, false)
-    if desc and desc ~= "" then
-        textLabel(item, desc, 0, 22, width, 26, 9, MUTED, false, true)
-    end
-    return item
-end
-
-local function section(page, title)
-    local card = new("Frame", {
-        Size = UDim2.fromOffset(CARD_W, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        BackgroundColor3 = CARD,
-        BackgroundTransparency = 0.12,
-        BorderSizePixel = 0,
-    })
-    corner(card, 12)
-    stroke(card, STROKE, 0.5, 1)
-    append(page, card)
-    local pad = new("UIPadding", {
-        PaddingTop = UDim.new(0, 14),
-        PaddingBottom = UDim.new(0, 14),
-        PaddingLeft = UDim.new(0, 14),
-        PaddingRight = UDim.new(0, 14),
-    })
-    pad.Parent = card
-    local layout = new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder })
-    layout.Parent = card
-    append(card, textLabel(nil, string.upper(title), 0, 0, CARD_INNER, 14, 9, MUTED, true, false))
-    return card
-end
-
-local function makeToggle(parent, initial, onChange)
-    local value = initial and true or false
-    local toggle = new("TextButton", {
-        Position = UDim2.new(1, -46, 0, 15),
-        Size = UDim2.fromOffset(46, 24),
-        BackgroundColor3 = value and ACCENT or OFF,
-        Text = "",
-        AutoButtonColor = false,
-        BorderSizePixel = 0,
-    })
-    toggle.Parent = parent
-    corner(toggle, 12)
-    local knob = new("Frame", {
-        Position = UDim2.fromOffset(value and 25 or 3, 3),
-        Size = UDim2.fromOffset(18, 18),
-        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-        BorderSizePixel = 0,
-    })
-    knob.Parent = toggle
-    corner(knob, 9)
-    local function set(nextValue, silent)
-        value = nextValue and true or false
-        TweenService:Create(toggle, TweenInfo.new(0.16), { BackgroundColor3 = value and ACCENT or OFF }):Play()
-        TweenService:Create(knob, TweenInfo.new(0.16), { Position = UDim2.fromOffset(value and 25 or 3, 3) }):Play()
-        if not silent and onChange then
-            onChange(value)
-        end
-    end
-    toggle.Activated:Connect(function()
-        set(not value)
-    end)
-    return set
-end
-
-local function toggleRow(card, key, title, desc, onChange)
-    local item = row(card, title, desc, 150)
-    local set = makeToggle(item, settings[key], function(value)
-        setSetting(key, value)
-        if onChange then onChange(value) end
-    end)
-    ui.setters[key] = function(value)
-        set(value, true)
-    end
-    return set
-end
-
-local function buttonRow(card, title, desc, labelText, onClick, color)
-    local item = row(card, title, desc, 150)
-    local button = new("TextButton", {
-        Size = UDim2.fromOffset(120, 28),
-        Position = UDim2.new(1, -120, 0, 13),
-        BackgroundColor3 = color or ACCENT,
-        Text = labelText,
-        Font = Enum.Font.GothamBold,
-        TextSize = 9,
-        TextColor3 = Color3.fromRGB(255, 255, 255),
-        AutoButtonColor = false,
-    })
-    button.Parent = item
-    corner(button, 8)
-    button.Activated:Connect(onClick)
-    return button
-end
-
-local function keybindRow(card, key, title, desc)
-    local item = row(card, title, desc, 160)
-    local button = new("TextButton", {
-        Size = UDim2.fromOffset(130, 28),
-        Position = UDim2.new(1, -130, 0, 13),
-        BackgroundColor3 = CARD2,
-        Text = tostring(settings[key] or "?"),
-        Font = Enum.Font.GothamBold,
-        TextSize = 9,
-        TextColor3 = TEXT,
-        AutoButtonColor = false,
-    })
-    button.Parent = item
-    corner(button, 8)
-    button.Activated:Connect(function()
-        beginCapture(key, button)
-    end)
-    ui.setters[key] = function(value)
-        button.Text = tostring(value)
-    end
-    return button
-end
-
--- ============================================================ dashboard
-local dashboard = addTab("Dashboard", "Dashboard")
-ui.pageSubtitle.Text = "Live control and session overview."
-local statusCard = section(dashboard, "Live status")
-ui.dashStatus = append(statusCard, textLabel(nil, "DISABLED", 0, 0, CARD_INNER, 22, 16, MUTED, true, false))
-ui.dashDetails = append(statusCard, textLabel(nil, "", 0, 0, CARD_INNER, 28, 9, MUTED, false, true))
-
-local controlCard = section(dashboard, "Control")
-local controlRow = append(controlCard, row(nil, "Auto-play", "Start or stop the policy loop.", 150))
-local controlButton = new("TextButton", {
-    Size = UDim2.fromOffset(120, 30),
-    Position = UDim2.new(1, -120, 0, 11),
-    BackgroundColor3 = ACCENT,
-    Text = "Start bot",
-    Font = Enum.Font.GothamBold,
-    TextSize = 9,
-    TextColor3 = Color3.fromRGB(255, 255, 255),
-    AutoButtonColor = false,
-})
-controlButton.Parent = controlRow
-corner(controlButton, 8)
-controlButton.Activated:Connect(function()
-    setEnabled(not enabled)
-end)
-
-local panicRow = append(controlCard, row(nil, "Panic disable", "Immediately stop and release the current action.", 150))
-local panicButton = new("TextButton", {
-    Size = UDim2.fromOffset(120, 28),
-    Position = UDim2.new(1, -120, 0, 12),
-    BackgroundColor3 = RED,
-    Text = "PANIC",
-    Font = Enum.Font.GothamBold,
-    TextSize = 9,
-    TextColor3 = Color3.fromRGB(255, 255, 255),
-    AutoButtonColor = false,
-})
-panicButton.Parent = panicRow
-corner(panicButton, 8)
-panicButton.Activated:Connect(function()
-    setEnabled(false)
-end)
-
-ui.dashboardSet = function(value)
-    value = value and true or false
-    ui.dashStatus.Text = value and "ENABLED" or "DISABLED"
-    ui.dashStatus.TextColor3 = value and GREEN or MUTED
-    controlButton.Text = value and "Stop bot" or "Start bot"
-    controlButton.BackgroundColor3 = value and RED or ACCENT
-end
-
-local sessionCard = section(dashboard, "Session")
-local sessionGame = append(sessionCard, textLabel(nil, "Game: " .. detectedGame(), 0, 0, CARD_INNER, 16, 10, TEXT, false, false))
-local sessionVersion = append(sessionCard, textLabel(nil, "Build: v" .. VERSION, 0, 0, CARD_INNER, 16, 10, MUTED, false, false))
-ui.sessionUptime = append(sessionCard, textLabel(nil, "Uptime: 0:00", 0, 0, CARD_INNER, 16, 10, MUTED, false, false))
-
--- ============================================================ automation
-local automation = addTab("Automation", "Automation")
-ui.pageSubtitle.Text = "Startup behavior and input safety."
-local behaviorCard = section(automation, "Behavior")
-toggleRow(behaviorCard, "autoEnable", "Enable on inject", "Start the bot automatically when this script runs.", function(value)
-    notify(value and "Auto-start enabled." or "Auto-start disabled.")
-end)
-toggleRow(behaviorCard, "pauseOnType", "Pause while typing", "Stop sending inputs while the chat or a text box is focused.", function(value)
-    notify(value and "Typing guard enabled." or "Typing guard disabled.")
-end)
-toggleRow(behaviorCard, "notifications", "Notifications", "Show short confirmations in the footer.")
-buttonRow(automation, "Safety", "Panic disable", "Stop the bot and release inputs immediately.", "PANIC", function()
-    setEnabled(false)
-end, RED)
-
--- ============================================================ settings
-local settingsPage = addTab("Settings", "Settings")
-ui.pageSubtitle.Text = "Appearance, keybinds and defaults."
-local appearanceCard = section(settingsPage, "Appearance")
-local scaleRow = append(appearanceCard, row(nil, "Menu scale", "Resize the window without changing the layout.", 230))
-local scaleValue = textLabel(scaleRow, tostring(math.floor(settings.menuScale * 100 + 0.5)) .. "%", 246, 18, 48, 18, 10, MUTED, true, false)
-local scaleButtons = {}
-local function markScale()
-    for amount, button in pairs(scaleButtons) do
-        button.BackgroundColor3 = math.abs(settings.menuScale - amount) < 0.001 and ACCENT or CARD2
-    end
-end
-for _, entry in ipairs({ { "80%", 0.8 }, { "100%", 1 }, { "115%", 1.15 } }) do
-    local amount = entry[2]
-    local button = new("TextButton", {
-        Size = UDim2.fromOffset(56, 28),
-        Position = UDim2.new(1, -180 + (#scaleButtons) * 62, 0, 14),
-        BackgroundColor3 = CARD2,
-        Text = entry[1],
-        Font = Enum.Font.GothamBold,
-        TextSize = 9,
-        TextColor3 = TEXT,
-        AutoButtonColor = false,
-    })
-    button.Parent = scaleRow
-    corner(button, 7)
-    scaleButtons[amount] = button
-    button.Activated:Connect(function()
-        settings.menuScale = amount
-        ui.scale.Scale = amount
-        scaleValue.Text = tostring(math.floor(amount * 100 + 0.5)) .. "%"
-        markScale()
-        autosave()
-    end)
-end
-ui.setters.menuScale = function(value)
-    if ui.scale then ui.scale.Scale = value end
-    if scaleValue then scaleValue.Text = tostring(math.floor(value * 100 + 0.5)) .. "%" end
-    markScale()
-end
-markScale()
-
-local keybindCard = section(settingsPage, "Keybinds")
-keybindRow(keybindCard, "bindMenu", "Toggle menu", "Show or hide this window.")
-keybindRow(keybindCard, "bindToggle", "Toggle bot", "Start or stop auto-play.")
-keybindRow(keybindCard, "bindPanic", "Panic disable", "Stop the bot and release inputs.")
-
-local defaultsCard = section(settingsPage, "Defaults")
-buttonRow(defaultsCard, "Restore defaults", "Reset keybinds, appearance and behavior switches.", "RESET", function()
-    resetSettings()
-end, CARD2)
-
--- ============================================================ configs
-local configs = addTab("Configs", "Configs")
-ui.pageSubtitle.Text = "Saved settings profiles."
-local saveCard = section(configs, "Save current settings")
-local nameRow = append(saveCard, row(nil, "", "", 0, 44))
-ui.nameBox = new("TextBox", {
-    Position = UDim2.fromOffset(0, 7),
-    Size = UDim2.fromOffset(384, 30),
-    BackgroundColor3 = CARD2,
-    Text = "",
-    PlaceholderText = "Profile name",
-    PlaceholderColor3 = MUTED,
-    TextColor3 = TEXT,
-    Font = Enum.Font.Gotham,
-    TextSize = 10,
-    ClearTextOnFocus = false,
-    TextXAlignment = Enum.TextXAlignment.Left,
-})
-ui.nameBox.Parent = nameRow
-corner(ui.nameBox, 8)
-local namePad = new("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) })
-namePad.Parent = ui.nameBox
-local saveButton = new("TextButton", {
-    Size = UDim2.fromOffset(112, 30),
-    Position = UDim2.new(1, -112, 0, 7),
-    BackgroundColor3 = ACCENT,
-    Text = "Save profile",
-    Font = Enum.Font.GothamBold,
-    TextSize = 9,
-    TextColor3 = Color3.fromRGB(255, 255, 255),
-    AutoButtonColor = false,
-})
-saveButton.Parent = nameRow
-corner(saveButton, 8)
-saveButton.Activated:Connect(function()
-    saveNamed(ui.nameBox.Text)
-end)
-
-ui.configList = section(configs, "Saved profiles")
-refreshConfigs = function()
-    if not ui.configList then return end
-    for _, child in ipairs(ui.configList:GetChildren()) do
-        if (child:IsA("Frame") and child.Name == "ProfileRow")
-            or (child:IsA("TextLabel") and child.Name == "ProfileEmpty") then
-            child:Destroy()
-        end
-    end
-    local names = listConfigs()
-    table.sort(names)
-    if #names == 0 then
-        local empty = append(ui.configList, textLabel(nil, "No profiles yet. Save the current settings above.", 0, 0, CARD_INNER, 24, 9, MUTED, false, true))
-        empty.Name = "ProfileEmpty"
-        return
-    end
-    for _, name in ipairs(names) do
-        local profileName = name
-        local profileRow = new("Frame", { Size = UDim2.fromOffset(CARD_INNER, 40), BackgroundColor3 = CARD2, BackgroundTransparency = 0.3, BorderSizePixel = 0 })
-        profileRow.Name = "ProfileRow"
-        append(ui.configList, profileRow)
-        corner(profileRow, 8)
-        textLabel(profileRow, profileName, 10, 11, 340, 18, 10, TEXT, true, false)
-        local load = new("TextButton", { Size = UDim2.fromOffset(58, 26), Position = UDim2.new(1, -130, 0, 7), BackgroundColor3 = ACCENT, Text = "Load", Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = Color3.fromRGB(255, 255, 255), AutoButtonColor = false })
-        load.Parent = profileRow
-        corner(load, 7)
-        load.Activated:Connect(function() loadNamed(profileName) end)
-        local del = new("TextButton", { Size = UDim2.fromOffset(58, 26), Position = UDim2.new(1, -64, 0, 7), BackgroundColor3 = CARD, Text = "Del", Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = Color3.fromRGB(220, 160, 175), AutoButtonColor = false })
-        del.Parent = profileRow
-        corner(del, 7)
-        del.Activated:Connect(function() deleteNamed(profileName) end)
-    end
-end
-ui.refreshConfigs = refreshConfigs
-
--- ============================================================ stats
-local stats = addTab("Stats", "Stats")
-ui.pageSubtitle.Text = "Session counters from the policy loop."
-local statsCard = section(stats, "This session")
-local function statRow(labelText, key)
-    local item = append(statsCard, row(nil, labelText, "", 0, 24))
-    local value = textLabel(item, "-", CARD_INNER - 160, 3, 160, 18, 11, TEXT, true, false)
-    value.TextXAlignment = Enum.TextXAlignment.Right
-    statValues[key] = value
-end
-statRow("Policy loads", "loads")
-statRow("Policy decisions", "decisions")
-statRow("Last compute", "compute")
-statRow("Last latency", "latency")
-statRow("Hooks installed", "hooks")
-statRow("Session uptime", "uptime")
-buttonRow(statsCard, "Reset counters", "Clear the session values without touching settings.", "RESET", function()
-    if bot.resetStats then bot.resetStats() end
-    notify("Session counters reset.")
-end, CARD2)
-
--- ============================================================ about
-local about = addTab("About", "About")
-ui.pageSubtitle.Text = "Build details and diagnostics."
-local aboutCard = section(about, "Build")
-ui.about = {}
-local function aboutRow(labelText, key)
-    local item = append(aboutCard, row(nil, labelText, "", 0, 24))
-    local value = textLabel(item, "-", CARD_INNER - 220, 3, 220, 18, 10, TEXT, true, false)
-    value.TextXAlignment = Enum.TextXAlignment.Right
-    ui.about[key] = value
-end
-aboutRow("Game", "game")
-aboutRow("Version", "version")
-aboutRow("Model", "model")
-aboutRow("Core", "core")
-ui.about.version.Text = "v" .. VERSION
-ui.about.core.Text = "v0.2.1"
-local actionCard = section(about, "Diagnostics")
-buttonRow(actionCard, "Copy diagnostics", "Copy a short runtime report.", "COPY", copyDiagnostics)
-buttonRow(actionCard, "Copy loadstring", "Copy the injection line.", "COPY", copyLoadstring)
-buttonRow(actionCard, "Reload script", "Re-download and re-inject this build.", "RELOAD", reloadScript)
-buttonRow(actionCard, "Unload", "Remove the menu and stop the bot.", "UNLOAD", unloadScript, RED)
-
--- ============================================================ finalization
-syncUiFromSettings = function()
-    for key, setter in pairs(ui.setters) do
-        if settings[key] ~= nil then
-            pcall(setter, settings[key])
-        end
-    end
-    if ui.scale then ui.scale.Scale = settings.menuScale end
-    updateHints()
-end
-ui.syncUiFromSettings = syncUiFromSettings
-
-updateHints = function()
-    ui.footerHint.Text = tostring(settings.bindMenu) .. "  menu"
-    ui.dashDetails.Text = detectedGame()
-        .. "  -  session " .. uptime()
-        .. "  -  " .. tostring(settings.bindToggle) .. " toggle"
-        .. "  /  " .. tostring(settings.bindPanic) .. " panic"
-    if ui.about then
-        ui.about.game.Text = detectedGame()
-        ui.about.model.Text = tostring(bot.modelStatus or "Loading...")
-    end
-end
-ui.updateHints = updateHints
-
-selectTab(1)
-syncUiFromSettings()
-refreshConfigs()
-ui.dashboardSet(enabled)
-updateHints()
-setMenu(true)
-status("Ready - press " .. tostring(settings.bindMenu) .. " to hide the menu")
-notify("Experimental v" .. VERSION .. " loaded.", 3)
-
-bot.toggleMenu = function()
-    setMenu(not gui.Enabled)
-end
-
-end
-
-buildMenu()
 local generation=0
 local action,job,pending
 local nextTick,lastProgress,lastTick=0,0,nil
@@ -1770,14 +1074,8 @@ if alive then
 end
 end
 end)
--- ============================================================ telemetry
-bot.stats = { loads = 0 }
-bot.modelStatus = "Loading..."
-bot.statsSummary = "Standby"
-
-local wasReady = false
+-- ============================================================ widget runtime
 local lastUi = 0
-local lastHints = 0
 
 local function refreshTyping()
     local focused = UIS:GetFocusedTextBox() ~= nil
@@ -1787,38 +1085,41 @@ local function refreshTyping()
     end
     typing = nextTyping
     if enabled then
-        if typing then
-            status("ON - Paused (typing)")
-        elseif ready then
-            status("ON - Playing")
-        else
-            status("ON - Waiting for live match")
-        end
+        status(typing and "ON - Paused (typing)" or (ready and "ON - Playing" or "ON - Loading model"))
     end
 end
 
-bot.resetStats = function()
-    bot.stats.loads = 0
-    decisions = 0
-    computeMs = 0
-    latencyMs = 0
-end
-
-bot.diagnostics = function()
-    return table.concat({
-        "Experimental v" .. VERSION .. " (" .. detectedGame() .. ")",
-        "enabled=" .. tostring(enabled)
-            .. " ready=" .. tostring(ready)
-            .. " typing=" .. tostring(typing)
-            .. " blocked=" .. tostring(blocked),
-        "state=" .. tostring(matchWaiting),
-        "decisions=" .. tostring(decisions)
-            .. " compute=" .. string.format("%.1fms", computeMs or 0)
-            .. " latency=" .. string.format("%.1fms", latencyMs or 0),
-        "uptime=" .. uptime()
-            .. " connections=" .. tostring(#connections)
-            .. " hooks=" .. tostring(#hooked),
-    }, "\n")
+local function updateWidget()
+    if not ui.status then
+        return
+    end
+    if enabled then
+        if typing then
+            ui.status.Text = "PAUSED"
+            ui.status.TextColor3 = AMBER
+            ui.dot.BackgroundColor3 = AMBER
+            ui.details.Text = "Typing detected. Inputs are released."
+        elseif ready then
+            ui.status.Text = "ACTIVE"
+            ui.status.TextColor3 = GREEN
+            ui.dot.BackgroundColor3 = GREEN
+            ui.details.Text = detectedGame() .. "  //  " .. uptime() .. "  //  " .. message
+        else
+            ui.status.Text = "STARTING"
+            ui.status.TextColor3 = BLUE
+            ui.dot.BackgroundColor3 = BLUE
+            ui.details.Text = "Loading model  //  " .. uptime()
+        end
+    else
+        ui.status.Text = "STANDBY"
+        ui.status.TextColor3 = MUTED
+        ui.dot.BackgroundColor3 = MUTED
+        ui.details.Text = "Stopped  //  " .. tostring(settings.bindToggle) .. " to start"
+    end
+    if ui.control then
+        ui.control.Text = enabled and "STOP BOT" or "START BOT"
+        ui.control.BackgroundColor3 = enabled and RED or ACCENT
+    end
 end
 
 connect(RunService.Heartbeat, function()
@@ -1826,62 +1127,12 @@ connect(RunService.Heartbeat, function()
         return
     end
     local now = os.clock()
-    if now - lastUi < 0.25 then
+    if now - lastUi < 0.2 then
         return
     end
     lastUi = now
-
     refreshTyping()
-
-    if ready and not wasReady then
-        bot.stats.loads += 1
-    end
-    wasReady = ready
-
-    if statValues.loads then statValues.loads.Text = tostring(bot.stats.loads) end
-    if statValues.decisions then statValues.decisions.Text = tostring(decisions) end
-    if statValues.compute then statValues.compute.Text = string.format("%.1f ms", computeMs or 0) end
-    if statValues.latency then statValues.latency.Text = string.format("%.1f ms", latencyMs or 0) end
-    if statValues.hooks then statValues.hooks.Text = tostring(#hooked) end
-    if statValues.uptime then statValues.uptime.Text = uptime() end
-
-    bot.modelStatus = ready and "Ready" or (blocked and "Blocked" or "Loading...")
-    bot.statsSummary = string.format("%d decisions - %.1f ms compute", decisions or 0, computeMs or 0)
-
-    if ui.sessionUptime then
-        ui.sessionUptime.Text = "Uptime: " .. uptime()
-    end
-    if ui.about and ui.about.model then
-        ui.about.model.Text = tostring(bot.modelStatus)
-    end
-
-    if ui.dashStatus then
-        if enabled then
-            if typing then
-                ui.dashStatus.Text = "PAUSED (typing)"
-                ui.dashStatus.TextColor3 = Color3.fromRGB(251, 191, 36)
-            else
-                ui.dashStatus.Text = ready and "ENABLED" or "ENABLED - WAITING FOR MODEL"
-                ui.dashStatus.TextColor3 = Color3.fromRGB(74, 222, 128)
-            end
-        else
-            ui.dashStatus.Text = "DISABLED"
-            ui.dashStatus.TextColor3 = Color3.fromRGB(139, 143, 165)
-        end
-    end
-
-    if ui.footerStatus then
-        if toastText ~= "" and now < toastUntil then
-            ui.footerStatus.Text = toastText
-        elseif ui.footerStatus.Text ~= message then
-            ui.footerStatus.Text = message
-        end
-    end
-
-    if now - lastHints >= 1 then
-        lastHints = now
-        updateHints()
-    end
+    updateWidget()
 end)
 
 connect(UIS.InputBegan, function(input, processed)
@@ -1904,7 +1155,7 @@ connect(UIS.InputBegan, function(input, processed)
         return
     end
     if key == settings.bindMenu then
-        if bot.toggleMenu then bot.toggleMenu() end
+        setMenu(not gui.Enabled)
     elseif key == settings.bindToggle then
         setEnabled(not enabled)
     elseif key == settings.bindPanic then
@@ -1912,11 +1163,10 @@ connect(UIS.InputBegan, function(input, processed)
     end
 end)
 
-if settings.autoEnable then
-    task.defer(function()
-        task.wait(1)
-        if alive and not enabled then
-            setEnabled(true, true)
-        end
-    end)
-end
+task.defer(function()
+    task.wait(0.4)
+    if alive and not enabled then
+        setEnabled(true, true)
+        status("ON - Auto-start waiting for model")
+    end
+end)
