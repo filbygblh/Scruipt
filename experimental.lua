@@ -7,6 +7,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local LP = Players.LocalPlayer
@@ -36,8 +37,8 @@ local cancelCapture
 
 local settings = {
     pauseOnType = true,
-    bindMenu = "Insert",
-    bindToggle = "F1",
+    bindMenu = "LeftControl",
+    bindToggle = "F",
     bindPanic = "F2",
 }
 
@@ -97,9 +98,11 @@ local function loadSettings()
         return
     end
     if type(data.pauseOnType) == "boolean" then settings.pauseOnType = data.pauseOnType end
-    if type(data.bindMenu) == "string" and data.bindMenu ~= "" then settings.bindMenu = data.bindMenu end
-    if type(data.bindToggle) == "string" and data.bindToggle ~= "" then settings.bindToggle = data.bindToggle end
-    if type(data.bindPanic) == "string" and data.bindPanic ~= "" then settings.bindPanic = data.bindPanic end
+    if (tonumber(data.version) or 0) >= 2 then
+        if type(data.bindMenu) == "string" and data.bindMenu ~= "" then settings.bindMenu = data.bindMenu end
+        if type(data.bindToggle) == "string" and data.bindToggle ~= "" then settings.bindToggle = data.bindToggle end
+        if type(data.bindPanic) == "string" and data.bindPanic ~= "" then settings.bindPanic = data.bindPanic end
+    end
 end
 
 local function saveSettings()
@@ -110,6 +113,7 @@ local function saveSettings()
     ensureFolder(FOLDER)
     local ok, encoded = pcall(function()
         return HttpService:JSONEncode({
+            version = 2,
             pauseOnType = settings.pauseOnType,
             bindMenu = settings.bindMenu,
             bindToggle = settings.bindToggle,
@@ -174,7 +178,7 @@ gui = new("ScreenGui", {
     IgnoreGuiInset = true,
     DisplayOrder = 80,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    Enabled = true,
+    Enabled = false,
 })
 gui.Parent = LP:WaitForChild("PlayerGui")
 
