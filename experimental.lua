@@ -30,7 +30,7 @@ local typing = false
 local reset
 local startedAt = os.clock()
 local bot = {}
-local ui = {}
+local ui = { setters = {} }
 local tabs = {}
 local statValues = {}
 local toastText, toastUntil = "", 0
